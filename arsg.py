@@ -19,6 +19,33 @@ torch.manual_seed(1234)
 
 __all__ = ['arsg']
 
+def init_weights(m):
+    for name, param in m.named_parameters():
+        if 'weight' in name:
+            if 'rnn' in name:
+                nn.init.orthogonal_(param.data, gain=1)
+            else:
+                nn.init.normal_(param.data, mean=0, std=0.01)
+        else:
+            nn.init.constant_(param.data, 0)
+
+class EndoderAttention(nn.Module):
+    def __init__(self, input_dim, num_layers, dropout):
+        super().__init__()
+        self.enc_hid_dim = enc_hid_dim 
+        self.dec_hid_dim = dec_hid_dim 
+        self.num_layers = num_layers
+
+        self.rnn = nn.GRU(
+                input_dim,
+                enc_hid_dim,
+                num_layers=self.num_layers,
+                dropout=dropout,
+                bidirectional=True)
+
+        self.fc = nn.Linear(enc_hid_dim * 2, dec_hid_dim)
+        self.dropout = nn.Dropout(dropout)
+
 class Encoder(nn.Module):
     def __init__(self, input_dim, enc_hid_dim, dec_hid_dim, num_layers, dropout):
         super().__init__()
@@ -152,7 +179,7 @@ class Decoder(nn.Module):
         
         #prediction = [batch size, output dim]
         
-        return prediction, hidden.squeeze(0)
+        return prediction, hidden.squeeze(0), a
 
 class Seq2Seq(nn.Module):
     def __init__(self, encoder, decoder):
@@ -161,7 +188,7 @@ class Seq2Seq(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
 
-    def forward(self, src, trg, teacher_forcing_ratio = 0.75):
+    def forward(self, src, trg, teacher_forcing_ratio=0):
         
         #src = [src len, batch size]
         #trg = [trg len, batch size]
@@ -169,22 +196,25 @@ class Seq2Seq(nn.Module):
         batch_size = src.shape[1]
         trg_len = trg.shape[0]
         trg_vocab_size = self.decoder.output_dim
-        
-        #tensor to store decoder outputs
-        outputs = torch.zeros(trg_len, batch_size, trg_vocab_size).cuda()
+        src_len = 779 
+        # src_len = 621 
         
         #encoder_outputs is all hidden states of the input sequence, back and forwards
         #hidden is the final forward and backward hidden states, passed through a linear layer
         encoder_outputs, decoder_init_hidden = self.encoder(src)
                 
         #first input to the decoder is the <sos> tokens
-        input = trg[0,:]
-         
+        input = torch.zeros([batch_size]).long().cuda()
+        
         hidden = decoder_init_hidden 
-        for t in range(1, trg_len):
+        #tensor to store decoder outputs
+        outputs = torch.zeros(trg_len, batch_size, trg_vocab_size).cuda()
+        attentions = torch.zeros(trg_len, batch_size, src_len).cuda()
+        
+        for t in range(0, trg_len):
             # receive output tensor (predictions) and new hidden state
 
-            output, hidden = self.decoder(input, hidden, encoder_outputs)
+            output, hidden, a = self.decoder(input, hidden, encoder_outputs)
             
             #decide if we are going to use teacher forcing or not
             top1 = output.argmax(1) 
@@ -193,7 +223,10 @@ class Seq2Seq(nn.Module):
             input = trg[t] if teacher_force else top1
 
             outputs[t] = output
-        return outputs
+            attentions[t] = a.squeeze(1)
+
+            
+        return outputs, attentions
 
     def beam_search(self, src, trg, beam_size=10):
         
@@ -209,7 +242,7 @@ class Seq2Seq(nn.Module):
         encoder_outputs, hidden = self.encoder(src)
                 
         # first input to the decoder is the <sos> tokens
-        input = trg[0,:]
+        input = torch.zeros([batch_size]).long().cuda()
         
         decoded = beam_decode(self.decoder,
                 input,
@@ -244,7 +277,7 @@ def train(model, iterator, optimizer, criterion, clip):
         src, trg = src.cuda(), trg.cuda()
         optimizer.zero_grad()
         
-        output = model(src, trg)
+        output, attentions = model(src, trg, teacher_forcing_ratio=0.75)
         
         compare_output = output.argmax(axis=2).detach().cpu().numpy()
         
@@ -263,7 +296,7 @@ def train(model, iterator, optimizer, criterion, clip):
         optimizer.step()
         
         epoch_loss += loss.item()
-        # epoch_per += PER(compare_trg, compare_output)
+        epoch_per += PER(compare_trg, compare_output)
         
     return epoch_loss / len(iterator), epoch_per / len(iterator)
 
@@ -284,7 +317,7 @@ def evaluate(model, iterator):
 
             src, trg = src.cuda(), trg.cuda()
 
-            output = model(src, trg)
+            output, attentions = model(src, trg)
             compare_output = output.argmax(axis=2).detach().cpu().numpy()
 
             output_dim = output.shape[-1]
@@ -307,6 +340,10 @@ def epoch_time(start_time, end_time):
 if __name__ == "__main__":
     os.makedirs("best_models", exist_ok=True)
 
+    #  name_model = "best_models/1016-1batch.pt"
+    name_model = "best_models/1016-fixPER-batch1.pt"
+    name_model = "best_models/1016-fixPER.pt"
+
     INPUT_DIM = 123
     OUTPUT_DIM = 63
     ECN_NUM_LAYER = 3
@@ -316,7 +353,7 @@ if __name__ == "__main__":
     DEC_DROPOUT = 0.75
 
     N_EPOCHS = 1000
-    BATCH_SIZE = 80
+    BATCH_SIZE = 40
     CLIP = 1
 
     augmentation = []
@@ -327,17 +364,7 @@ if __name__ == "__main__":
     dec = Decoder(OUTPUT_DIM, ENC_HID_DIM, DEC_HID_DIM, DEC_DROPOUT, attn)
 
     model = Seq2Seq(enc, dec).cuda()
-    def init_weights(m):
-        for name, param in m.named_parameters():
-            if 'weight' in name:
-                if 'rnn' in name:
-                    nn.init.orthogonal_(param.data, gain=1)
-                else:
-                    nn.init.normal_(param.data, mean=0, std=0.01)
-            else:
-                nn.init.constant_(param.data, 0)
 
-    print(model)
     model.apply(init_weights)
 
     # optimizer = optim.Adam(model.parameters())
@@ -362,7 +389,6 @@ if __name__ == "__main__":
         pin_memory=True,
     )
 
-    name_model = "best_models/1016.pt"
     print("iterator loading done")
     if os.path.exists(name_model):
         # model.load_state_dict(torch.load(name_model))
@@ -373,7 +399,7 @@ if __name__ == "__main__":
         best_valid_loss = checkpoint['best_valid_loss']
         best_valid_per = checkpoint['best_valid_per']
         print('load model', name_model)
-        print(f'epoch: {epoch}, best_loss: {best_valid_loss}')
+        print(f'epoch: {epoch}, best_per: {best_valid_per}, best_loss: {best_valid_loss}')
     else:
         print(f"new model {name_model} start")
         epoch = 0

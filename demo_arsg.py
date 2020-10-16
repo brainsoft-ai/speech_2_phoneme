@@ -32,9 +32,9 @@ def test_model(model, iterator, beam_size=10):
 
             src, trg = src.cuda(), trg.cuda()
 
-            output = model(src, trg, teacher_forcing_ratio=0)
+            output, attentions = model(src, trg)
             compare_output = output.argmax(axis=2).detach().cpu().numpy()
-            # output = model.beam_search(src, trg, beam_size=1)
+            beam_output = model.beam_search(src, trg, beam_size=1)
 
             output_dim = output.shape[-1]
             output = output.view(-1, output_dim)
@@ -43,6 +43,7 @@ def test_model(model, iterator, beam_size=10):
             
             epoch_loss += loss.item()
             epoch_per += PER(compare_trg, compare_output, verbose=True) 
+            print(beam_output)
         
         epoch_loss /= len(iterator)
         epoch_per /= len(iterator)
