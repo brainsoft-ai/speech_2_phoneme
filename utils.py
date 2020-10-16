@@ -74,13 +74,13 @@ def PER(y, y_hat, verbose=False):
 
         eos_index = np.where(predict == 1)
         if len(eos_index[0]) >= 1:
-            predict = predict[:eos_index[0][0]]
+            predict = predict[:eos_index[0][0]+1]
 
         for idy, each in enumerate(predict):
             if phn_61[each] in mapping.keys():
                 predict[idy] = phn_61.index(mapping[phn_61[each]])
 
-        each_per = editDistDP(answer, predict) / answer.shape[0]
+        each_per = editDistDP(answer_rough, predict) / answer.shape[0]
         sum_per += each_per
 
         if verbose and idx == 0:
