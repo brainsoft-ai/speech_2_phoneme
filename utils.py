@@ -12,6 +12,19 @@ mapping = {'ah': 'ax', 'ax-h': 'ax', 'ux': 'uw', 'aa': 'ao', 'ih': 'ix', 'axr': 
 phn_39 = ['ae', 'ao', 'aw', 'ax', 'ay', 'b', 'ch', 'd', 'dh', 'dx', 'eh',  'er', 'ey', 'f', 'g', 'h#', 'hh', 'ix', 'iy', 'jh', 'k', 'l',  'm', 'n', 'ng', 'ow', 'oy', 'p', 'r', 's', 't', 'th', 'uh', 'uw', 'v', 'w', 'y', 'z', 'zh']
 phn_39 = ['<sos>', '<eos>'] + phn_39
 
+
+def save_current_model(model, optimizer, valid_loss, valid_per, epoch, name_model):
+    print(f'  -- best model found --  ')
+    torch.save({
+        'epoch': epoch+1,
+        'model_state_dict': model.state_dict(),
+        'best_valid_loss': valid_loss,
+        'best_valid_per': valid_per,
+        'optimizer_state_dict': optimizer.state_dict(), 
+        'loss': valid_loss
+        }, name_model)
+
+
 def load_model(model, name_model, optimizer):
     best_valid_loss = float('inf')
     best_valid_per = float('inf')
