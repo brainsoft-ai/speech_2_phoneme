@@ -33,7 +33,6 @@ def column_norm_weights_until_one(m):
             else:
                 normed_vec = param.data.norm(dim=0)
                 indexes = normed_vec > 1
-                print(indexes.sum())
                 condition = indexes.repeat(param.data.size(0), 1)
                 param.data = torch.where(condition, param.data/normed_vec, param.data)
 
@@ -379,10 +378,9 @@ def epoch_time(start_time, end_time):
 if __name__ == "__main__":
     os.makedirs("best_models", exist_ok=True)
 
-
     #  name_model = "best_models/1016-fixPER-batch1.pt"
     BATCH_SIZE = 1
-    BATCH_SIZE = 80
+    BATCH_SIZE = 60
 
     INPUT_DIM = 123
     OUTPUT_DIM = 63
@@ -408,9 +406,9 @@ if __name__ == "__main__":
     if train_type == 'first':
         lr, rho, eps, weight_decay =1.0, 0.95, 1e-08, 0 
         optimizer = optim.Adadelta(model.parameters(), lr=lr, rho=rho, eps=eps, weight_decay=weight_decay)
-        #  columnNorm, adaWeightNoise = True, False
         columnNorm, adaWeightNoise = False, False
-        name_model = "best_models/1019-first-2.pt"
+        columnNorm, adaWeightNoise = True, False
+        name_model = "best_models/1019-first.pt"
         model.apply(init_weights)
         epoch, best_valid_loss, best_valid_per = load_model(model, name_model, optimizer)
     elif train_type == 'second':
@@ -449,31 +447,15 @@ if __name__ == "__main__":
 
         if train_type in ['first', 'second'] \
            and valid_loss < best_valid_loss:
-            print(f'  -- best model found --  ')
             best_valid_loss = valid_loss
             best_valid_per = valid_per
-            torch.save({
-                'epoch': epoch+1,
-                'model_state_dict': model.state_dict(),
-                'best_valid_loss': valid_loss,
-                'best_valid_per': valid_per,
-                'optimizer_state_dict': optimizer.state_dict(), 
-                'loss': valid_loss
-                }, name_model)
+            save_model_with_state(model, optimizer, valid_loss, valid_per, epoch, name_model)
             earlyStopCount += 0
         elif train_type in ['last'] \
            and valid_per < best_valid_per:
-            print(f'  -- best model found --  ')
             best_valid_loss = valid_loss
             best_valid_per = valid_per
-            torch.save({
-                'epoch': epoch+1,
-                'model_state_dict': model.state_dict(),
-                'best_valid_loss': valid_loss,
-                'best_valid_per': valid_per,
-                'optimizer_state_dict': optimizer.state_dict(), 
-                'loss': valid_loss
-                }, name_model)
+            save_model_with_state(model, optimizer, valid_loss, valid_per, epoch, name_model)
             earlyStopCount += 0
         else:
             earlyStopCount += 1
