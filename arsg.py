@@ -188,7 +188,7 @@ class Seq2Seq(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
 
-    def forward(self, src, trg, teacher_forcing_ratio=0):
+    def forward(self, src, trg, teacher_forcing_ratio=0, show_attention=False):
         
         #src = [src len, batch size]
         #trg = [trg len, batch size]
@@ -209,7 +209,9 @@ class Seq2Seq(nn.Module):
         hidden = decoder_init_hidden 
         #tensor to store decoder outputs
         outputs = torch.zeros(trg_len, batch_size, trg_vocab_size).cuda()
-        attentions = torch.zeros(trg_len, batch_size, src_len).cuda()
+        attentions = None
+        if show_attention:
+            attentions = torch.zeros(trg_len, batch_size, src_len).cuda()
         
         for t in range(0, trg_len):
             # receive output tensor (predictions) and new hidden state
@@ -223,8 +225,8 @@ class Seq2Seq(nn.Module):
             input = trg[t] if teacher_force else top1
 
             outputs[t] = output
-            attentions[t] = a.squeeze(1)
-
+            if show_attention:
+                attentions[t] = a.squeeze(1)
             
         return outputs, attentions
 
@@ -341,8 +343,11 @@ if __name__ == "__main__":
     os.makedirs("best_models", exist_ok=True)
 
     #  name_model = "best_models/1016-1batch.pt"
-    name_model = "best_models/1016-fixPER-batch1.pt"
+
+    BATCH_SIZE = 40
     name_model = "best_models/1016-fixPER.pt"
+    BATCH_SIZE = 1
+    name_model = "best_models/1016-fixPER-batch1.pt"
 
     INPUT_DIM = 123
     OUTPUT_DIM = 63
@@ -353,7 +358,6 @@ if __name__ == "__main__":
     DEC_DROPOUT = 0.75
 
     N_EPOCHS = 1000
-    BATCH_SIZE = 40
     CLIP = 1
 
     augmentation = []
