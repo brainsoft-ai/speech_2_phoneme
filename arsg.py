@@ -19,6 +19,20 @@ torch.manual_seed(1234)
 
 __all__ = ['arsg']
 
+def add_noise_to_weights(m):
+    with torch.no_grad():
+        if hasattr(m, 'weight'):
+            unit = m.weight.mean() * 0.1
+            m.weight.add_(torch.randn(m.weight.size()) * unit)
+
+def column_norm_weights(m):
+    for name, param in m.named_parameters():
+        if 'weight' in name:
+            if 'rnn' in name:
+                pass
+            else:
+                param.data = param.data / param.data.norm(dim=0)
+
 def init_weights(m):
     for name, param in m.named_parameters():
         if 'weight' in name:
@@ -30,7 +44,7 @@ def init_weights(m):
             nn.init.constant_(param.data, 0)
 
 class EndoderAttention(nn.Module):
-    def __init__(self, input_dim, num_layers, dropout):
+    def __init__(self, input_dim, num_layers):
         super().__init__()
         self.enc_hid_dim = enc_hid_dim 
         self.dec_hid_dim = dec_hid_dim 
@@ -40,14 +54,12 @@ class EndoderAttention(nn.Module):
                 input_dim,
                 enc_hid_dim,
                 num_layers=self.num_layers,
-                dropout=dropout,
                 bidirectional=True)
 
         self.fc = nn.Linear(enc_hid_dim * 2, dec_hid_dim)
-        self.dropout = nn.Dropout(dropout)
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim, enc_hid_dim, dec_hid_dim, num_layers, dropout):
+    def __init__(self, input_dim, enc_hid_dim, dec_hid_dim, num_layers):
         super().__init__()
         self.enc_hid_dim = enc_hid_dim 
         self.dec_hid_dim = dec_hid_dim 
@@ -57,11 +69,9 @@ class Encoder(nn.Module):
                 input_dim,
                 enc_hid_dim,
                 num_layers=self.num_layers,
-                dropout=dropout,
                 bidirectional=True)
 
         self.fc = nn.Linear(enc_hid_dim * 2, dec_hid_dim)
-        self.dropout = nn.Dropout(dropout)
         
     def forward(self, src):
         
@@ -115,24 +125,32 @@ class Attention(nn.Module):
         
         return F.softmax(attention, dim=1)
 
+def one_hot_embedding(labels, num_classes=64):
+    """Embedding labels to one-hot form.
+
+    Args:
+      labels: (LongTensor) class labels, sized [N,].
+      num_classes: (int) number of classes.
+
+    Returns:
+      (tensor) encoded labels, sized [N, #classes].
+    """
+    y = torch.eye(num_classes) 
+    return y[labels] 
+
 class Decoder(nn.Module):
-    def __init__(self, output_dim, enc_hid_dim, dec_hid_dim, dropout, attention):
+    def __init__(self, output_dim, enc_hid_dim, dec_hid_dim, attention):
         super().__init__()
 
         self.output_dim = output_dim
         self.attention = attention
-        self.emb_dim = 512 
        
-        self.embedding = nn.Embedding(output_dim, self.emb_dim)
-
         self.rnn = nn.GRU(
-                (enc_hid_dim * 2) + self.emb_dim,
+                (enc_hid_dim * 2) + 64,
                 dec_hid_dim,
                 num_layers=1,
             )
         self.fc_out = nn.Linear((enc_hid_dim * 2) + dec_hid_dim + 1, output_dim)
-        
-        self.dropout = nn.Dropout(dropout)
         
     def forward(self, input, hidden, encoder_outputs):
              
@@ -143,7 +161,7 @@ class Decoder(nn.Module):
         input = input.unsqueeze(0)
         #input = [1, batch size]
         
-        embedded = self.dropout(self.embedding(input))
+        embedded = one_hot_embedding(input).cuda()
         # embedded = [1, batch_size, emb dim]
         
         a = self.attention(hidden, encoder_outputs)
@@ -262,8 +280,12 @@ class Seq2Seq(nn.Module):
 
         return decoded_numpy
 
-def train(model, iterator, optimizer, criterion, clip):
+def train(model, iterator, optimizer, criterion, clip, columnNorm=False, adaWeightNoise=False):
     
+    if adaWeightNoise:
+        pass
+        # model.apply(add_noise_to_weights)
+
     model.train()
     
     epoch_loss = 0
@@ -296,6 +318,8 @@ def train(model, iterator, optimizer, criterion, clip):
         
         torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
         optimizer.step()
+        if columnNorm:
+            model.apply(column_norm_weights)
         
         epoch_loss += loss.item()
         epoch_per += PER(compare_trg, compare_output)
@@ -342,20 +366,16 @@ def epoch_time(start_time, end_time):
 if __name__ == "__main__":
     os.makedirs("best_models", exist_ok=True)
 
-    #  name_model = "best_models/1016-1batch.pt"
 
-    BATCH_SIZE = 40
-    name_model = "best_models/1016-fixPER.pt"
+    #  name_model = "best_models/1016-fixPER-batch1.pt"
     BATCH_SIZE = 1
-    name_model = "best_models/1016-fixPER-batch1.pt"
+    BATCH_SIZE = 80
 
     INPUT_DIM = 123
     OUTPUT_DIM = 63
     ECN_NUM_LAYER = 3
     ENC_HID_DIM = 256 
     DEC_HID_DIM = 256 
-    ENC_DROPOUT = 0.75
-    DEC_DROPOUT = 0.75
 
     N_EPOCHS = 1000
     CLIP = 1
@@ -363,60 +383,58 @@ if __name__ == "__main__":
     augmentation = []
     # augmentation = ['repeat']
 
-    enc = Encoder(INPUT_DIM, ENC_HID_DIM, DEC_HID_DIM, ECN_NUM_LAYER, ENC_DROPOUT)
+    enc = Encoder(INPUT_DIM, ENC_HID_DIM, DEC_HID_DIM, ECN_NUM_LAYER)
     attn = Attention(ENC_HID_DIM, DEC_HID_DIM)
-    dec = Decoder(OUTPUT_DIM, ENC_HID_DIM, DEC_HID_DIM, DEC_DROPOUT, attn)
+    dec = Decoder(OUTPUT_DIM, ENC_HID_DIM, DEC_HID_DIM, attn)
 
     model = Seq2Seq(enc, dec).cuda()
-
-    model.apply(init_weights)
-
-    # optimizer = optim.Adam(model.parameters())
-    optimizer = optim.Adadelta(model.parameters(),
-            lr=1.0, rho=0.95, eps=1e-08, weight_decay=0)
     criterion = nn.CrossEntropyLoss()
+    earlyStopCount = 0 
 
-    best_valid_loss = float('inf')
-    best_valid_per = float('inf')
-    train_iterator = DataLoader(
-        timit(feats_type='fbank', set_name='train', aug=augmentation),
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        num_workers=2,
-        pin_memory=True,
-    )
-    valid_iterator = DataLoader(
-        timit(feats_type='fbank', set_name='test'),
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=2,
-        pin_memory=True,
-    )
-
-    print("iterator loading done")
-    if os.path.exists(name_model):
-        # model.load_state_dict(torch.load(name_model))
-        checkpoint = torch.load(name_model)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        epoch = checkpoint['epoch']
-        best_valid_loss = checkpoint['best_valid_loss']
-        best_valid_per = checkpoint['best_valid_per']
-        print('load model', name_model)
-        print(f'epoch: {epoch}, best_per: {best_valid_per}, best_loss: {best_valid_loss}')
-    else:
-        print(f"new model {name_model} start")
+    train_type = "first"
+    if train_type == 'first':
+        lr, rho, eps, weight_decay =1.0, 0.95, 1e-08, 0 
+        optimizer = optim.Adadelta(model.parameters(), lr=lr, rho=rho, eps=eps, weight_decay=weight_decay)
+        columnNorm, adaWeightNoise = True, False
+        name_model = "best_models/1019-first.pt"
+        model.apply(init_weights)
+        epoch, best_valid_loss, best_valid_per = load_model(model, name_model, optimizer)
+    elif train_type == 'second':
+        lr, rho, eps, weight_decay =1.0, 0.95, 1e-08, 0.1
+        optimizer = optim.Adadelta(model.parameters(), lr=lr, rho=rho, eps=eps, weight_decay=weight_decay)
+        columnNorm, adaWeightNoise = False, True
+        name_model = "best_models/1019-first.pt"
+        epoch, best_valid_loss, best_valid_per = load_model(model, name_model, optimizer)
+        name_model = "best_models/1019-second.pt"
+        epoch = 0
+    elif train_type == 'last':
+        lr, rho, eps, weight_decay =1.0, 0.95, 1e-10, 0.1
+        optimizer = optim.Adadelta(model.parameters(), lr=lr, rho=rho, eps=eps, weight_decay=weight_decay)
+        columnNorm, adaWeightNoise = False, True
+        name_model = "best_models/1019-second.pt"
+        epoch, best_valid_loss, best_valid_per = load_model(model, name_model, optimizer)
+        name_model = "best_models/1019-last.pt"
         epoch = 0
 
-    while epoch < N_EPOCHS:
+    train_iterator = DataLoader(
+        timit(feats_type='fbank', set_name='train', aug=augmentation),
+        batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True,
+    )
+    valid_iterator = DataLoader(
+        timit(feats_type='fbank', set_name='dev'),
+        batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True,
+    )
+
+    while earlyStopCount < 1250:
         start_time = time.time()
-        train_loss, train_per = train(model, train_iterator, optimizer, criterion, CLIP)
+        train_loss, train_per = train(model, train_iterator, optimizer, criterion, CLIP, columnNorm, adaWeightNoise)
         valid_loss, valid_per = evaluate(model, valid_iterator)
 
         end_time = time.time()
         epoch_mins, epoch_secs = epoch_time(start_time, end_time)
 
-        if valid_per < best_valid_per:
+        if train_type in ['first', 'second'] \
+           and valid_loss < best_valid_loss:
             print(f'  -- best model found --  ')
             best_valid_loss = valid_loss
             best_valid_per = valid_per
@@ -428,6 +446,23 @@ if __name__ == "__main__":
                 'optimizer_state_dict': optimizer.state_dict(), 
                 'loss': valid_loss
                 }, name_model)
+            earlyStopCount += 0
+        elif train_type in ['last'] \
+           and valid_per < best_valid_per:
+            print(f'  -- best model found --  ')
+            best_valid_loss = valid_loss
+            best_valid_per = valid_per
+            torch.save({
+                'epoch': epoch+1,
+                'model_state_dict': model.state_dict(),
+                'best_valid_loss': valid_loss,
+                'best_valid_per': valid_per,
+                'optimizer_state_dict': optimizer.state_dict(), 
+                'loss': valid_loss
+                }, name_model)
+            earlyStopCount += 0
+        else:
+            earlyStopCount += 1
 
         print(f'Epoch: {epoch+1} | Time: {epoch_mins}m {epoch_secs}s')
         print(f'\tTrain Loss: {train_loss:7.3f} | Train PER: {train_per:7.3f}')
