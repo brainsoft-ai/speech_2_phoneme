@@ -22,16 +22,20 @@ __all__ = ['arsg']
 def add_noise_to_weights(m):
     with torch.no_grad():
         if hasattr(m, 'weight'):
-            unit = m.weight.mean() * 0.1
+            unit = m.weight.mean() * 0.01
             m.weight.add_(torch.randn(m.weight.size()) * unit)
 
-def column_norm_weights(m):
+def column_norm_weights_until_one(m):
     for name, param in m.named_parameters():
         if 'weight' in name:
-            if 'rnn' in name:
+            if 'rnn' in name or 'ih' in name or 'hh' in name:
                 pass
             else:
-                param.data = param.data / param.data.norm(dim=0)
+                normed_vec = param.data.norm(dim=0)
+                indexes = normed_vec > 1
+                print(indexes.sum())
+                condition = indexes.repeat(param.data.size(0), 1)
+                param.data = torch.where(condition, param.data/normed_vec, param.data)
 
 def init_weights(m):
     for name, param in m.named_parameters():
@@ -99,26 +103,33 @@ class Attention(nn.Module):
     def __init__(self, enc_hid_dim, dec_hid_dim):
         super().__init__()
         
-        self.attn = nn.Linear((enc_hid_dim * 2) + dec_hid_dim, dec_hid_dim)
+        self.attn = nn.Linear((enc_hid_dim * 2) + dec_hid_dim + 1, dec_hid_dim)
         self.v = nn.Linear(dec_hid_dim, 1, bias = False)
         
-    def forward(self, hidden, encoder_outputs):
+    def forward(self, hidden, encoder_outputs, prev_attn):
         
         #hidden = [batch size, dec hid dim]
         #encoder_outputs = [src len, batch size, enc hid dim * 2]
+        #prev_attn = [batch size, 1, src len] 
+
         batch_size = encoder_outputs.shape[1]
         src_len = encoder_outputs.shape[0]
         
         #repeat decoder hidden state src_len times
         hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
-        
         encoder_outputs = encoder_outputs.permute(1, 0, 2)
+        if prev_attn is None:
+            prev_attn = torch.zeros([batch_size, src_len, 1]).cuda()
+        else:
+            prev_attn = prev_attn.permute(0, 2, 1) 
         
         #hidden = [batch size, src len, dec hid dim]
         #encoder_outputs = [batch size, src len, enc hid dim * 2]
+        #prev_attn = [batch size, src len, 1] 
 
-        energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim = 2))) 
         #energy = [batch size, src len, dec hid dim]
+        energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs, prev_attn), dim = 2))) 
+        
         attention = self.v(energy).squeeze(2)
         
         #attention= [batch size, src len]
@@ -152,7 +163,7 @@ class Decoder(nn.Module):
             )
         self.fc_out = nn.Linear((enc_hid_dim * 2) + dec_hid_dim + 1, output_dim)
         
-    def forward(self, input, hidden, encoder_outputs):
+    def forward(self, input, hidden, encoder_outputs, prev_attn):
              
         # input = [batch size]
         # hidden = [batch size, 256]
@@ -164,7 +175,7 @@ class Decoder(nn.Module):
         embedded = one_hot_embedding(input).cuda()
         # embedded = [1, batch_size, emb dim]
         
-        a = self.attention(hidden, encoder_outputs)
+        a = self.attention(hidden, encoder_outputs, prev_attn)
         # a = [batch size, src len] -> [batch size, 1, src len]
         a = a.unsqueeze(1)
 
@@ -228,13 +239,14 @@ class Seq2Seq(nn.Module):
         #tensor to store decoder outputs
         outputs = torch.zeros(trg_len, batch_size, trg_vocab_size).cuda()
         attentions = None
+        a = None
         if show_attention:
             attentions = torch.zeros(trg_len, batch_size, src_len).cuda()
         
         for t in range(0, trg_len):
             # receive output tensor (predictions) and new hidden state
 
-            output, hidden, a = self.decoder(input, hidden, encoder_outputs)
+            output, hidden, a = self.decoder(input, hidden, encoder_outputs, a)
             
             #decide if we are going to use teacher forcing or not
             top1 = output.argmax(1) 
@@ -319,7 +331,8 @@ def train(model, iterator, optimizer, criterion, clip, columnNorm=False, adaWeig
         torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
         optimizer.step()
         if columnNorm:
-            model.apply(column_norm_weights)
+            model.apply(column_norm_weights_until_one)
+            pass
         
         epoch_loss += loss.item()
         epoch_per += PER(compare_trg, compare_output)
@@ -395,8 +408,9 @@ if __name__ == "__main__":
     if train_type == 'first':
         lr, rho, eps, weight_decay =1.0, 0.95, 1e-08, 0 
         optimizer = optim.Adadelta(model.parameters(), lr=lr, rho=rho, eps=eps, weight_decay=weight_decay)
-        columnNorm, adaWeightNoise = True, False
-        name_model = "best_models/1019-first.pt"
+        #  columnNorm, adaWeightNoise = True, False
+        columnNorm, adaWeightNoise = False, False
+        name_model = "best_models/1019-first-2.pt"
         model.apply(init_weights)
         epoch, best_valid_loss, best_valid_per = load_model(model, name_model, optimizer)
     elif train_type == 'second':
