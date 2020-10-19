@@ -2,13 +2,33 @@
 module for misc.
 """
 import struct
+import os
 import numpy as np
+import torch
 
 phn_61 = ['aa', 'ae', 'ah', 'ao', 'aw', 'ax', 'ax-h', 'axr', 'ay', 'b', 'bcl', 'ch', 'd', 'dcl', 'dh', 'dx', 'eh', 'el', 'em', 'en', 'eng', 'epi', 'er', 'ey', 'f', 'g', 'gcl', 'h#', 'hh', 'hv',  'ih', 'ix', 'iy', 'jh', 'k', 'kcl', 'l', 'm', 'n', 'ng', 'nx', 'ow', 'oy', 'p', 'pau', 'pcl', 'q', 'r', 's', 'sh', 't', 'tcl', 'th', 'uh', 'uw', 'ux', 'v', 'w', 'y', 'z', 'zh']
 phn_61 = ['<sos>', '<eos>'] + phn_61
 mapping = {'ah': 'ax', 'ax-h': 'ax', 'ux': 'uw', 'aa': 'ao', 'ih': 'ix', 'axr': 'er', 'el': 'l', 'em': 'm', 'en': 'n', 'nx': 'n', 'eng': 'ng', 'sh': 'zh', 'hv': 'hh', 'bcl': 'h#', 'pcl': 'h#', 'dcl': 'h#', 'tcl': 'h#', 'gcl': 'h#', 'kcl': 'h#', 'q': 'h#', 'epi': 'h#', 'pau': 'h#'}
 phn_39 = ['ae', 'ao', 'aw', 'ax', 'ay', 'b', 'ch', 'd', 'dh', 'dx', 'eh',  'er', 'ey', 'f', 'g', 'h#', 'hh', 'ix', 'iy', 'jh', 'k', 'l',  'm', 'n', 'ng', 'ow', 'oy', 'p', 'r', 's', 't', 'th', 'uh', 'uw', 'v', 'w', 'y', 'z', 'zh']
 phn_39 = ['<sos>', '<eos>'] + phn_39
+
+def load_model(model, name_model, optimizer):
+    best_valid_loss = float('inf')
+    best_valid_per = float('inf')
+    if os.path.exists(name_model):
+        # model.load_state_dict(torch.load(name_model))
+        print('load model', name_model)
+        checkpoint = torch.load(name_model)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        epoch = checkpoint['epoch']
+        best_valid_loss = checkpoint['best_valid_loss']
+        best_valid_per = checkpoint['best_valid_per']
+        print(f'epoch: {epoch}, best_per: {best_valid_per}, best_loss: {best_valid_loss}')
+    else:
+        print(f"new model {name_model} start")
+        epoch = 0
+    return epoch, best_valid_loss, best_valid_per
 
 def load_dj_spectrogram(filepath, verbose=False):
     """
@@ -70,7 +90,6 @@ def PER(y, y_hat, verbose=False):
         for idy, each in enumerate(answer):
             if phn_61[each] in mapping.keys():
                 answer_rough[idy] = phn_61.index(mapping[phn_61[each]])
-        answer_rough = answer_rough[1:] # trim <sos>
 
         eos_index = np.where(predict == 1)
         if len(eos_index[0]) >= 1:
