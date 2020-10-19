@@ -34,7 +34,11 @@ def test_model(model, iterator, beam_size=10):
 
             output, attentions = model(src, trg)
             compare_output = output.argmax(axis=2).detach().cpu().numpy()
-            beam_output = model.beam_search(src, trg, beam_size=1)
+            beam_output = model.beam_search(src, trg, beam_size=10)
+            print(trg.T)
+            beam_output = beam_output[1:]
+            print(beam_output.T)
+            #  print(compare_outpt)
 
             output_dim = output.shape[-1]
             output = output.view(-1, output_dim)
@@ -42,8 +46,12 @@ def test_model(model, iterator, beam_size=10):
             loss = criterion(output, trg)
             
             epoch_loss += loss.item()
+            print('greedy')
             epoch_per += PER(compare_trg, compare_output, verbose=True) 
-            print(beam_output)
+            print('beam')
+            _ = PER(compare_trg, beam_output, verbose=True) 
+            # print(beam_output)
+            break
         
         epoch_loss /= len(iterator)
         epoch_per /= len(iterator)
@@ -77,13 +85,13 @@ if __name__ == "__main__":
 
     valid_iterator = DataLoader(
         timit(feats_type='fbank', set_name='test'),
-        batch_size=BATCH_SIZE,
+        batch_size=1,
         shuffle=False,
         num_workers=2,
         pin_memory=True,
     )
 
-    name_model = f"best_models/1016.pt"
+    name_model = "best_models/1019-first.pt"
     if not os.path.exists(name_model):
         print(name_model, "not exist")
         exit(0)
