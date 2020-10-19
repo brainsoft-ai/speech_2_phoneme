@@ -65,8 +65,6 @@ if __name__ == "__main__":
     ECN_NUM_LAYER = 3
     ENC_HID_DIM = 256 
     DEC_HID_DIM = 256 
-    ENC_DROPOUT = 0.75
-    DEC_DROPOUT = 0.75
 
     N_EPOCHS = 1000
     BATCH_SIZE = 80
@@ -76,8 +74,8 @@ if __name__ == "__main__":
     # augmentation = ['repeat']
 
     attn = Attention(ENC_HID_DIM, DEC_HID_DIM)
-    enc = Encoder(INPUT_DIM, ENC_HID_DIM, DEC_HID_DIM, ECN_NUM_LAYER, ENC_DROPOUT)
-    dec = Decoder(OUTPUT_DIM, ENC_HID_DIM, DEC_HID_DIM, DEC_DROPOUT, attn)
+    enc = Encoder(INPUT_DIM, ENC_HID_DIM, DEC_HID_DIM, ECN_NUM_LAYER)
+    dec = Decoder(OUTPUT_DIM, ENC_HID_DIM, DEC_HID_DIM, attn)
 
     model = Seq2Seq(enc, dec).cuda()
     optimizer = optim.Adam(model.parameters())
