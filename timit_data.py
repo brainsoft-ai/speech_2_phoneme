@@ -153,14 +153,15 @@ class timit(torch.utils.data.Dataset):
         # find max length over whole data
         # todo: 나중에 예쁘게 고칠 수 잇음
         featlen_max, phonemelen_max = 0, 0
-        for each_set in ['train', 'dev', 'test']:
-            self.x, self.y = create_cahce_data(each_set, feats_type, remake=remake)
+        if remake is False:
+            for each_set in ['train', 'dev', 'test']:
+                self.x, self.y = create_cahce_data(each_set, feats_type)
 
-            for each in self.x:
-                featlen_max = featlen_max if featlen_max > len(each) else len(each)
-                
-            for each in self.y:
-                phonemelen_max = phonemelen_max if phonemelen_max > len(each) else len(each)
+                for each in self.x:
+                    featlen_max = featlen_max if featlen_max > len(each) else len(each)
+                    
+                for each in self.y:
+                    phonemelen_max = phonemelen_max if phonemelen_max > len(each) else len(each)
 
         self.x, self.y = create_cahce_data(set_name, feats_type, remake=remake)
         # preproc constant
@@ -205,14 +206,16 @@ class timit(torch.utils.data.Dataset):
 
 if __name__ == "__main__":
 
-    remake = False 
-    aug = ['repeat']
-    iterator = timit(feats_type='fbank', set_name='train', aug=aug, remake=remake)
-    iterator = timit(feats_type='fbank', set_name='dev', aug=aug, remake=remake)
-    iterator = timit(feats_type='fbank', set_name='test', aug=aug, remake=remake)
+    feats_type = 'fbank'
+    remake = False
+
+    # aug = ['repeat']
+    aug = []
+    iterator = timit(feats_type, set_name='train', aug=aug, remake=remake)
+    iterator = timit(feats_type, set_name='dev', aug=aug, remake=remake)
+    iterator = timit(feats_type, set_name='test', aug=aug, remake=remake)
 
     for x,y in iterator:
-        
         pass
 
     for idx, each in enumerate(phn_61):
