@@ -105,7 +105,7 @@ class Attention(nn.Module):
         self.attn = nn.Linear((enc_hid_dim * 2) + dec_hid_dim + 1, dec_hid_dim)
         self.v = nn.Linear(dec_hid_dim, 1, bias = False)
         
-    def forward(self, hidden, encoder_outputs, prev_attn):
+    def forward(self, hidden, encoder_outputs, prev_attn, last_layer='softmax'):
         
         #hidden = [batch size, dec hid dim]
         #encoder_outputs = [src len, batch size, enc hid dim * 2]
@@ -133,7 +133,15 @@ class Attention(nn.Module):
         
         #attention= [batch size, src len]
         
-        return F.softmax(attention, dim=1)
+        if last_layer in ['sharp']:
+            beta = 2
+            return F.softmax(beta*attention, dim=1)
+        elif last_layer in ['smooth']: 
+            sig_val = torch.sigmoid(attention)
+            denominator = sig_val.sum(axis=1).unsqueeze(0).permute(1,0).repeat(1,6)
+            return sig_val / denominator
+        else:
+            return F.softmax(attention, dim=1)
 
 def one_hot_embedding(labels, num_classes=64):
     """Embedding labels to one-hot form.
@@ -193,11 +201,9 @@ class Decoder(nn.Module):
         #output = [seq len, batch size, dec hid dim * n directions]
         #hidden = [n layers * n directions, batch size, dec hid dim]
         
-        #seq len, n layers and n directions will always be 1 in this decoder, therefore:
+        # seq_len, n layers and n directions will always be 1 in this decoder, therefore:
         #output = [1, batch size, dec hid dim]
         #hidden = [1, batch size, dec hid dim]
-        #this also means that output == hidden
-        assert (output == hidden).all()
         
         input = input.squeeze(0).unsqueeze(1).float()
         output = output.squeeze(0)
@@ -406,9 +412,9 @@ if __name__ == "__main__":
     if train_type == 'first':
         lr, rho, eps, weight_decay =1.0, 0.95, 1e-08, 0 
         optimizer = optim.Adadelta(model.parameters(), lr=lr, rho=rho, eps=eps, weight_decay=weight_decay)
-        columnNorm, adaWeightNoise = False, False
         columnNorm, adaWeightNoise = True, False
-        name_model = "best_models/1019-first.pt"
+        columnNorm, adaWeightNoise = False, False
+        name_model = "best_models/1019-first-2.pt"
         model.apply(init_weights)
         epoch, best_valid_loss, best_valid_per = load_model(model, name_model, optimizer)
     elif train_type == 'second':
