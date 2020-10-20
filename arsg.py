@@ -19,11 +19,16 @@ torch.manual_seed(1234)
 
 __all__ = ['arsg']
 
-def add_noise_to_weights(m):
+def add_noise_to_weights(m, epoch):
+    if epoch >= 50:
+        epoch = 50
+    adaptive_weight = (50-epoch)*0.002
+
     with torch.no_grad():
         if hasattr(m, 'weight'):
-            unit = m.weight.mean() * 0.01
-            m.weight.add_(torch.randn(m.weight.size()) * unit)
+            m.weight.mul_(
+                    torch.normal(1, adaptive_weight, m.weight.size()
+                ).cuda())
 
 def column_norm_weights_until_one(m):
     for name, param in m.named_parameters():
@@ -32,6 +37,7 @@ def column_norm_weights_until_one(m):
                 pass
             else:
                 normed_vec = param.data.norm(dim=0)
+                print(name, param.data.shape, normed_vec.shape)
                 indexes = normed_vec > 1
                 condition = indexes.repeat(param.data.size(0), 1)
                 param.data = torch.where(condition, param.data/normed_vec, param.data)
@@ -101,11 +107,53 @@ class Encoder(nn.Module):
 class Attention(nn.Module):
     def __init__(self, enc_hid_dim, dec_hid_dim):
         super().__init__()
+        self.src_len = 779
+        matrix_const = 512
+        k, r = 10, 201
+
+        self.w = nn.Linear(matrix_const, 1)
+        self.F = nn.Conv1d(1, k, kernel_size=r, padding=100)
+        self.W = nn.Linear(dec_hid_dim, matrix_const, bias=False)
+        self.V = nn.Linear(enc_hid_dim*2, matrix_const, bias=False)
+        self.U = nn.Linear(k, matrix_const, bias=False)
+        self.b = nn.Parameter(torch.ones(matrix_const))
+        
+    def forward(self, hidden, encoder_outputs, prev_attn, last_layer='smooth'):
+        
+        batch_size = encoder_outputs.shape[1]
+        src_len = encoder_outputs.shape[0]
+
+        if prev_attn is None:
+            prev_attn = torch.zeros([batch_size, 1, src_len]).cuda()
+        f = self.F(prev_attn).permute(0,2,1) # [B, L, k]
+
+        #hidden = [batch size, dec hid dim]
+        #encoder_outputs = [src len, batch size, enc hid dim * 2]
+
+        #repeat decoder hidden state src_len times
+        s = hidden.unsqueeze(1).repeat(1, src_len, 1) # [B, L, 256]
+        h = encoder_outputs.permute(1, 0, 2) # [B, L, 512]
+        e = self.w(torch.tanh(self.W(s) + self.V(h) + self.U(f) + self.b)).squeeze(2)
+        
+        if last_layer in ['sharp']:
+            beta = 2
+            return F.softmax(beta*e, dim=1)
+        elif last_layer in ['smooth']: 
+            self.src_len = 779
+            sig_val = torch.sigmoid(e)
+            denominator = sig_val.sum(axis=1).unsqueeze(0).permute(1,0).repeat(1,self.src_len)
+            return sig_val / denominator
+        else:
+            return F.softmax(e, dim=1)
+
+class Attention_wrong(nn.Module):
+    def __init__(self, enc_hid_dim, dec_hid_dim):
+        super().__init__()
         
         self.attn = nn.Linear((enc_hid_dim * 2) + dec_hid_dim + 1, dec_hid_dim)
         self.v = nn.Linear(dec_hid_dim, 1, bias = False)
         
-    def forward(self, hidden, encoder_outputs, prev_attn, last_layer='softmax'):
+    def forward(self, hidden, encoder_outputs, prev_attn, last_layer='smooth'):
         
         #hidden = [batch size, dec hid dim]
         #encoder_outputs = [src len, batch size, enc hid dim * 2]
@@ -137,8 +185,9 @@ class Attention(nn.Module):
             beta = 2
             return F.softmax(beta*attention, dim=1)
         elif last_layer in ['smooth']: 
+            self.src_len = 779
             sig_val = torch.sigmoid(attention)
-            denominator = sig_val.sum(axis=1).unsqueeze(0).permute(1,0).repeat(1,6)
+            denominator = sig_val.sum(axis=1).unsqueeze(0).permute(1,0).repeat(1,self.src_len)
             return sig_val / denominator
         else:
             return F.softmax(attention, dim=1)
@@ -297,11 +346,10 @@ class Seq2Seq(nn.Module):
 
         return decoded_numpy
 
-def train(model, iterator, optimizer, criterion, clip, columnNorm=False, adaWeightNoise=False):
+def train(model, iterator, optimizer, criterion, clip, columnNorm=False, adaWeightNoise=False, epoch=0):
     
     if adaWeightNoise:
-        pass
-        # model.apply(add_noise_to_weights)
+        model.apply(add_noise_to_weights, epoch)
 
     model.train()
     
@@ -400,6 +448,15 @@ if __name__ == "__main__":
     augmentation = []
     # augmentation = ['repeat']
 
+    train_iterator = DataLoader(
+        timit(feats_type='fbank', set_name='dev', aug=augmentation),
+        batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True,
+    )
+    valid_iterator = DataLoader(
+        timit(feats_type='fbank', set_name='dev'),
+        batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True,
+    )
+
     enc = Encoder(INPUT_DIM, ENC_HID_DIM, DEC_HID_DIM, ECN_NUM_LAYER)
     attn = Attention(ENC_HID_DIM, DEC_HID_DIM)
     dec = Decoder(OUTPUT_DIM, ENC_HID_DIM, DEC_HID_DIM, attn)
@@ -412,38 +469,28 @@ if __name__ == "__main__":
     if train_type == 'first':
         lr, rho, eps, weight_decay =1.0, 0.95, 1e-08, 0 
         optimizer = optim.Adadelta(model.parameters(), lr=lr, rho=rho, eps=eps, weight_decay=weight_decay)
-        columnNorm, adaWeightNoise = True, False
         columnNorm, adaWeightNoise = False, False
-        name_model = "best_models/1019-first-2.pt"
+        name_model = "best_models/1020-first.pt"
         model.apply(init_weights)
         epoch, best_valid_loss, best_valid_per = load_model(model, name_model, optimizer)
     elif train_type == 'second':
         lr, rho, eps, weight_decay =1.0, 0.95, 1e-08, 0.1
-        optimizer = optim.Adadelta(model.parameters(), lr=lr, rho=rho, eps=eps, weight_decay=weight_decay)
         columnNorm, adaWeightNoise = False, True
-        name_model = "best_models/1019-first.pt"
-        epoch, best_valid_loss, best_valid_per = load_model(model, name_model, optimizer)
-        name_model = "best_models/1019-second.pt"
-        epoch = 0
+        name_model = "best_models/1020-first.pt"
+        epoch, best_valid_loss, best_valid_per = load_model(model, name_model, None)
+        optimizer = optim.Adadelta(model.parameters(), lr=lr, rho=rho, eps=eps, weight_decay=weight_decay)
+        name_model = "best_models/1020-second.pt"
     elif train_type == 'last':
         lr, rho, eps, weight_decay =1.0, 0.95, 1e-10, 0.1
         optimizer = optim.Adadelta(model.parameters(), lr=lr, rho=rho, eps=eps, weight_decay=weight_decay)
         columnNorm, adaWeightNoise = False, True
-        name_model = "best_models/1019-second.pt"
-        epoch, best_valid_loss, best_valid_per = load_model(model, name_model, optimizer)
-        name_model = "best_models/1019-last.pt"
-        epoch = 0
+        name_model = "best_models/1020-second.pt"
+        epoch, best_valid_loss, best_valid_per = load_model(model, name_model, None)
+        optimizer = optim.Adadelta(model.parameters(), lr=lr, rho=rho, eps=eps, weight_decay=weight_decay)
+        name_model = "best_models/1020-last.pt"
 
-    train_iterator = DataLoader(
-        timit(feats_type='fbank', set_name='train', aug=augmentation),
-        batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True,
-    )
-    valid_iterator = DataLoader(
-        timit(feats_type='fbank', set_name='dev'),
-        batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True,
-    )
 
-    while earlyStopCount < 1250:
+    while earlyStopCount < 100000:
         start_time = time.time()
         train_loss, train_per = train(model, train_iterator, optimizer, criterion, CLIP, columnNorm, adaWeightNoise)
         valid_loss, valid_per = evaluate(model, valid_iterator)
@@ -456,15 +503,15 @@ if __name__ == "__main__":
             best_valid_loss = valid_loss
             best_valid_per = valid_per
             save_model_with_state(model, optimizer, valid_loss, valid_per, epoch, name_model)
-            earlyStopCount += 0
+            earlyStopCount = 0
         elif train_type in ['last'] \
            and valid_per < best_valid_per:
             best_valid_loss = valid_loss
             best_valid_per = valid_per
             save_model_with_state(model, optimizer, valid_loss, valid_per, epoch, name_model)
-            earlyStopCount += 0
+            earlyStopCount = 0
         else:
-            earlyStopCount += 1
+            earlyStopCount += len(train_iterator)
 
         print(f'Epoch: {epoch+1} | Time: {epoch_mins}m {epoch_secs}s')
         print(f'\tTrain Loss: {train_loss:7.3f} | Train PER: {train_per:7.3f}')

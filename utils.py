@@ -13,7 +13,7 @@ phn_39 = ['ae', 'ao', 'aw', 'ax', 'ay', 'b', 'ch', 'd', 'dh', 'dx', 'eh',  'er',
 phn_39 = ['<sos>', '<eos>'] + phn_39
 
 
-def save_current_model(model, optimizer, valid_loss, valid_per, epoch, name_model):
+def save_model_with_state(model, optimizer, valid_loss, valid_per, epoch, name_model):
     print(f'  -- best model found --  ')
     torch.save({
         'epoch': epoch+1,
@@ -33,7 +33,8 @@ def load_model(model, name_model, optimizer):
         print('load model', name_model)
         checkpoint = torch.load(name_model)
         model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if optimizer is not None:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         epoch = checkpoint['epoch']
         best_valid_loss = checkpoint['best_valid_loss']
         best_valid_per = checkpoint['best_valid_per']
